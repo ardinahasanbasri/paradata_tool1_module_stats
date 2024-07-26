@@ -1,0 +1,271 @@
+---
+title: "Paradata Statistics Report"
+format:
+  html:
+    embed-resources: true
+    page-layout: full
+    toc: true
+    toc-expand: 2
+    toc-location: left
+---
+
+## Aggregate Statistics of All Modules
+
+```{r}
+#| echo: false
+#| output: false 
+
+# Directory of Dataset # 
+
+library(dplyr)
+library(reactable)
+library(reactablefmtr)
+library(crosstalk)
+
+setwd(here::here("data", "04_created")) 
+
+data <- data.table::fread("paradata_clean.csv") # Get clean data. 
+
+# =============================================================================
+# Aggregate interview length by module and person
+# =============================================================================
+
+module_length <- data[section!="" ,list(tot_minutes=sum(elapsed_min)), by=c("interview__id", "ind_mod", "section", "person_ID")]
+
+# =============================================================================
+# Compute module-level statistics
+# =============================================================================
+
+stats_by_module <- mosaic::favstats(tot_minutes ~ section, data = module_length)[c("section","median", "mean", "sd", "min", "max", "n")]
+
+```
+
+```{r}
+#| echo: false
+
+# =============================================================================
+# Compose display table
+# =============================================================================
+
+reactable_theme <- reactable::reactableTheme(
+  borderColor = "#dfe2e5",
+  stripedColor = "#f6f8fa",
+  highlightColor = "#B0D4F3",
+  cellPadding = "8px 12px",
+  style = list(
+    fontFamily = "-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif"
+  ),
+  searchInputStyle = list(width = "100%")
+)
+
+stats_by_module %>%
+  reactable::reactable(
+    defaultSorted = c("median"),
+    defaultColDef = reactable::colDef(
+      format = reactable::colFormat(digits = 2)
+    ),
+    columns = list(
+      n = reactable::colDef(
+        format = reactable::colFormat(digits = 0), 
+        name="N", 
+        width = 80
+      ), 
+      section = reactable::colDef(width=200, name="Module"), 
+      min = reactable::colDef(name="Min"),
+      median = reactable::colDef(
+        name="Median", 
+        cell =  reactablefmtr::data_bars(
+          fill_color = "#FDB833", 
+          stats_by_module, 
+          text_position = "outside-base", 
+          round_edges = TRUE,
+          number_fmt = scales::number_format(accuracy = 0.1)
+        ),
+        defaultSortOrder = "desc"
+      ),
+      max = reactable::colDef(name="Max"),
+      mean = reactable::colDef(name="Mean"),
+      sd = reactable::colDef(name="SD")
+    ), 
+    searchable = TRUE,
+    striped = TRUE,
+    showSortable = TRUE,
+    highlight = TRUE,
+    bordered = TRUE,
+    theme = reactable_theme
+  )
+
+```
+
+## Module-Level Statistics Interviewer Comparison
+
+```{r}
+#| echo: false
+
+# List of interviewer:  
+interviewer_list <- unique(data$responsible[data$responsible!=""]) # Answer Removed and Completed events have no responsible 
+
+module_length_all <- data[section!="" & responsible!="" ,list(tot_minutes=sum(elapsed_min)), by=c("interview__id", "ind_mod", "section", "person_ID", "responsible", "team")]
+
+# Create Statistics Table for Each Individual 
+for (x in 1:length(interviewer_list)) {
+  stats_aux <- mosaic::favstats(tot_minutes ~ section, data = module_length_all[responsible==interviewer_list[x]])[c("section","median", "mean", "sd", "min", "max", "n")]
+  assign(interviewer_list[x], stats_aux)
+}
+
+```
+
+```{r, include=FALSE}
+
+table_interview_all <- data.table::data.table(section=NULL, min=NULL, Q1=NULL, median=NULL, Q3=NULL, max=NULL, mean=NULL, sd=NULL, n=NULL, team=NULL, responsible=NULL)     
+                              
+for (x in 1:length(interviewer_list)) {
+  aux_table <- data.table::data.table(get(interviewer_list[x]))
+  aux_table[,responsible:=interviewer_list[x]]
+  table_interview_all <- data.table::rbindlist(list(table_interview_all, aux_table))
+}
+
+section_list <- unique(data$section[data$section!=""]) 
+team_list <- unique(data[,c("team", "responsible")])
+
+table_interview_all<- merge(table_interview_all, team_list)
+```
+
+
+```{r, results='asis', fig.width=3, fig.height=3}
+#| echo: false
+#| warning: false
+
+for (i in 1:length(section_list)) {
+
+  cat("### Section: ", section_list[i], "\n")
+
+  graph <- ggplot2::ggplot(table_interview_all[section==section_list[i]], aes(x = median)) +
+    ggplot2::geom_density(fill = "cornflowerblue", color = "white") + 
+    ggplot2::labs(
+      title = "Histogram of Median Interview Length",
+      x = "Median Interview Length by Interviewer (in Minutes)"
+    ) +
+    ggplot2::theme_classic() + 
+    ggplot2::geom_vline(
+      xintercept=mean(table_interview_all[section==section_list[i]]$median), 
+      color = "#084887"
+    )
+    
+   sd <- SharedData$new(table_interview_all[section==section_list[i], c("team", "responsible", "median", "mean", "sd",  "min", "max", "n")])
+
+  n_sd <- table_interview_all[section==section_list[i], c("team", "responsible", "median", "mean", "sd",  "min", "max", "n")]
+
+  table1 <- sd %>%
+    reactable::reactable(
+      defaultSorted = c("median"),
+      defaultColDef = reactable::colDef(
+        format = reactable::colFormat(digits = 2), 
+        aggregate = "mean"
+      ), 
+      columns = list(
+        n = reactable::colDef(
+          name="N", 
+          format = reactable::colFormat(digits = 0), 
+          width = 50
+        ), 
+        min = reactable::colDef(name="Min"),
+        median = reactable::colDef(
+          name="Median", 
+          cell = reactablefmtr::data_bars(
+            n_sd, 
+            fill_color = "#FDB833", 
+            text_position = "outside-base", 
+            round_edges = TRUE,
+            number_fmt = scales::number_format(accuracy = 0.1)), 
+          defaultSortOrder = "desc"
+        ),
+        max = reactable::colDef(name="Max"),
+        mean = reactable::colDef(name="Mean"),
+        team = reactable::colDef(name="Team", width = 150),
+        responsible = reactable::colDef(name="Responsible", width = 170),
+        sd = reactable::colDef(name="SD")
+      ), 
+      groupBy = "team",
+      searchable = TRUE,
+      showSortable = TRUE,  
+      striped = TRUE,
+      highlight = TRUE,
+      bordered = TRUE,
+      theme = reactable_theme 
+    ) %>% 
+    add_title("Statistics by Team", font_size = 20)
+
+
+  table2 <- sd %>%
+    reactable(
+      defaultSorted = c("median"),
+      defaultColDef = reactable::colDef(
+        format = reactable::colFormat(digits = 2), 
+        aggregate = "mean"
+      ), 
+      columns = list(
+        n = reactable::colDef(
+          name="N", 
+          format = reactable::colFormat(digits = 0),
+          width = 50
+        ), 
+        min = reactable::colDef(name="Min"),
+        median = reactable::colDef(
+          name="Median", 
+          cell = data_bars(
+            n_sd, 
+            fill_color = "#FDB833", 
+            text_position = "outside-base",  
+            round_edges = TRUE,
+            number_fmt = scales::number_format(accuracy = 0.1)
+          ),
+          defaultSortOrder = "desc"
+        ),
+        max = reactable::colDef(name="Max"),
+        mean = reactable::colDef(name="Mean"),
+        team = reactable::colDef(name="Team", width = 150),
+        responsible = reactable::colDef(name="Responsible", width = 170),
+        sd = reactable::colDef(name="SD")
+      ), 
+      searchable = TRUE,
+      showSortable = TRUE,  
+      striped = TRUE,
+      highlight = TRUE,
+      bordered = TRUE,
+      theme = reactable_theme 
+    ) %>% 
+    add_title("Statistics by Interviewer", font_size = 20)
+      
+  cat("\n")
+  
+  print(htmltools::tagList(plotly::ggplotly(graph))) 
+        
+  print(
+    htmltools::tagList(
+      filter_slider(
+        id = paste0("median-", i), 
+        label = "Median", 
+        sharedData = sd, 
+        column=~median, 
+        round=2
+      )
+    )
+  )
+  print(htmltools::tags$br())
+  print(htmltools::tagList(table1))
+  print(htmltools::tags$br())
+  print(htmltools::tagList(table2))
+  
+  cat("\n")
+  
+}
+
+```
+
+```{r, include=FALSE}
+# To make sure that the dependencies are loaded (without this, nothing shows)
+  htmltools::tagList(plotly::ggplotly(graph))  
+  htmltools::tagList(filter_slider("median", "Median", sd, column=~median, round=2))
+```
+
